@@ -1,0 +1,17 @@
+base
+stringi
+dplyr
+reshape2
+ggplot2
+ggthemes
+lattice
+caret
+rattle
+rpart
+foreach
+iterators
+doParallel
+randomForest
+rpart.plot
+corrplot
+Rcpp

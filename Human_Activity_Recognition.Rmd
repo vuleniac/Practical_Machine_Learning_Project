@@ -1,0 +1,140 @@
+---
+title: "Human Activity Recognition"
+author: "Miguel Goncalves"
+output: html_document
+---
+
+##Synopsis
+
+> Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, or objective is to develop a model that correclty predicts the way that the activities are performed by using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset) website
+
+### Data Processing
+
+The data used can be found here:
+
+* [Train Set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+* [Test Set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+
+```{r ,echo=FALSE, cache=TRUE}
+
+file_url_train='https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+file_url_test='https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+data_set <- read.csv(file_url_train)
+predict_20 <- read.csv(file_url_test)
+
+```
+```{r, echo=FALSE, results="hide", warning=FALSE, message=FALSE, error=FALSE}
+
+is.installed <- function(pck = NULL){  
+    installed_pck <- as.character(rownames(installed.packages()))    
+    if(is.null(pck)){       
+        installed_pck        
+        }else{           
+            pck %in% installed_pck           
+            }
+    }
+
+required<- c("stringi", "dplyr", "reshape2", "ggplot2","ggthemes", "Rcpp", "caret", "rattle", "doParallel", "randomForest", "rpart", "rpart.plot", "corrplot")
+
+for(i in required){
+    if(is.installed(i)==T){       
+        if(!is.element(i, .packages())) {
+            library(i, character.only = T, quietly = T,  verbose = F)
+            }
+           }else{               
+               install.packages(i, quiet = T,  verbose = F)
+               library(i, character.only = T, quietly = T,  verbose = F)            
+               }
+    }
+```
+
+The dataset presents markers that indicate the end of a window of observation, given that the test set we are going to evaluate or predictions on doesn't have any of this "end of window" markets, we will remove them from the analysis. Also, this markers indicate observation where summary statistics of the activity performed in the corrresponding window are reported , therefore many of the variables will turn NAs on all of their existance one this markers are removed. These wariables are also removed.
+
+```{r, echo=FALSE, results="hide"}
+reduced_data_set <- data_set[data_set$new_window!="yes",]
+column_keep <- as.logical((sapply(reduced_data_set,function(x) sum(is.na(x)|x=="")))!=nrow(reduced_data_set))
+reduced_data_set <- reduced_data_set[,column_keep]
+reduced_predict_20 <- predict_20[,column_keep]
+```
+Finally, there are time variables and subject identifiers that provide no relevant information to the analysis. These variables are also removed to avoid introducing biases in the estimation. We are left with one predicted variable (classe) and 52 predictors. Following the correleation table of the predictos:
+
+```{r, echo=FALSE, fig.height=8, fig.width=8, fig.align='center'}
+corrplot(cor(reduced_data_set[,8:ncol(reduced_data_set)-1]), order = "AOE")
+```
+
+###Subsetting
+The dataset is sliced into a TRAINING set, covering 70% of the data, and a TEST set, with the remaining 30%, by random sampeling. 
+
+```{r, echo=TRUE, cache=TRUE}
+set.seed(3108)
+train_sample <- createDataPartition(y=reduced_data_set$classe, p=0.7, list = F)
+training <- reduced_data_set[train_sample,]
+testing <- reduced_data_set[-train_sample,]
+trainingSize<-dim(training)
+testingSize <-dim(testing)
+predictors <- names(training)[8:testingSize[2]]
+training <- training[,predictors]
+testing  <- testing[,predictors]
+predictors <- names(reduced_predict_20)[8:testingSize[2]]
+prediction <- reduced_predict_20[,predictors]
+```
+
+The TRAINING set has `r trainingSize[1]` observations while the TEST set has `r testingSize[1]`
+
+###Modeling
+
+We start with a **Desicion Tree** with a complexity parameter *cp=0.01* and cross-validation using random sapeling *Bootstrap*:
+```{r, echo=FALSE, cache=TRUE}
+HARmodDT <- train(classe ~ ., method="rpart", data=training, tuneGrid= data.frame(cp=0.01))
+HARmodDT
+```
+The estimated model shows **Accuracy**=`r HARmodDT$results[[2]]` and **Kappa**=`r HARmodDT$results[[3]]`
+
+```{r, echo=FALSE, cache=TRUE}
+outofsampleDT <- predict(HARmodDT, testing)
+confusionDT <- confusionMatrix(testing$classe, outofsampleDT)
+confusionDT
+```
+The out of sample evaluation show an **Accuracy**=`r confusionDT$overall[[1]]` and **Kappa**=`r confusionDT$overall[[2]]`
+
+We plot the estimated desicion tree
+```{r, echo=FALSE, fig.height=8, fig.width=8, fig.align='center'}
+prp(HARmodDT$finalModel)
+```
+
+The desicion tree model has a relatively low performance in the context of our analysis, therefore we will estimate a Random Forest looking for better accuracy.
+
+```{r, echo=FALSE, cache=TRUE}
+if(file.exists("~/HARmodRF.Rda")){
+    load("~/HARmodRF.Rda")} else {
+        cl <- makeCluster(detectCores())
+        registerDoParallel(cl)
+        HARmodRF <- train(classe ~ ., method="rf", data=training, prox=TRUE)
+        stopCluster(cl)
+    }
+
+HARmodRF
+```
+The estimated random forest model shows **Accuracy**=`r HARmodRF$results[HARmodRF$results$mtry==HARmodRF$bestTune[[1]],"Accuracy"]` and **Kappa**=`r HARmodRF$results[HARmodRF$results$mtry==HARmodRF$bestTune[[1]],"Kappa"]`
+
+The Random Forest model has far better in-sample accuracy than the Desicion Tree. Following, we evalute the out-of-sample performance:
+```{r, echo=FALSE, cache=FALSE}
+outofsampleRF <- predict(HARmodRF, testing)
+confusionRF <- confusionMatrix(testing$classe, outofsampleRF)
+confusionRF
+```
+
+The out of sample evaluation show an **Accuracy**=`r confusionRF$overall[[1]]` and **Kappa**=`r confusionRF$overall[[2]]`
+
+Given the performance of the Random Forest we chose to make the prediction with this more accurate model.
+
+###Prediction
+We then predict the values using the test set of 20 observations:
+
+```{r, echo=TRUE, cache=TRUE}
+
+result <- predict(HARmodRF, prediction)
+result
+```
